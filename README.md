@@ -1,5 +1,7 @@
 # flow
 
+[![CI](https://github.com/pabloos/flow/actions/workflows/ci.yml/badge.svg)](https://github.com/pabloos/flow/actions/workflows/ci.yml)
+[![coverage](https://raw.githubusercontent.com/pabloos/flow/badges/coverage.svg)](https://github.com/pabloos/flow/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/pabloos/flow.svg)](https://pkg.go.dev/github.com/pabloos/flow)
 ![dependencies: none](https://img.shields.io/badge/dependencies-none-informational)
 ![license: MIT](https://img.shields.io/badge/license-MIT-blue)

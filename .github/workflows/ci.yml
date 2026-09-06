@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test (race + coverage)
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+  coverage-badge:
+    # Only on pushes to main: PRs from forks can't write, and the badge tracks main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Measure coverage
+        run: |
+          go test -covermode=atomic -coverprofile=coverage.out ./...
+          pct=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+          echo "PCT=$pct" >> "$GITHUB_ENV"
+      - name: Publish badge to 'badges' branch
+        run: |
+          case "${PCT%.*}" in
+            100|9[0-9]) color=brightgreen ;;
+            8[0-9])     color=green ;;
+            7[0-9])     color=yellowgreen ;;
+            6[0-9])     color=yellow ;;
+            5[0-9])     color=orange ;;
+            *)          color=red ;;
+          esac
+          curl -fsSL "https://img.shields.io/badge/coverage-${PCT}%25-${color}" -o coverage.svg
+          tmp="$(mktemp -d)"; cp coverage.svg "$tmp/"; cd "$tmp"
+          git init -q -b badges
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add coverage.svg
+          git commit -q -m "coverage: ${PCT}%"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" badges
