@@ -6,35 +6,44 @@
 ![dependencies: none](https://img.shields.io/badge/dependencies-none-informational)
 ![license: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-Composable, **type-safe concurrent pipelines** for Go, built on channels — with
-fail-fast cancellation, deterministic ordering across fan-out, and bridges to Go
-1.23 iterators. Zero dependencies.
+**Implement the ends, flow owns the pipes.** You write a `Producer`, a
+`Processor` and a `Consumer` (or just pass closures); flow provides the
+concurrency, ordering, back-pressure and fail-fast cancellation. Zero
+dependencies.
 
 ```go
-ctx, cancel := flow.New(context.Background())
-defer cancel()
+double := flow.Map(func(n int) int { return n * 2 })
 
-lengths := flow.Map(ctx, func(s string) (int, error) { return len(s), nil })
-big     := flow.Filter(ctx, func(n int) (bool, error) { return n > 2, nil })
-
-out, err := flow.Collect(ctx, big(lengths(flow.Source(ctx, "a", "bb", "ccc"))))
-// out == [3], err == nil
+var out []int
+err := flow.Run(ctx, flow.Slice(1, 2, 3, 4), double, flow.Into(&out),
+    flow.Workers(4), flow.Ordered())
+// out == [2 4 6 8] — parallel, deterministic
 ```
 
-## From `int`-only pattern to a real library
+No channels, no `WaitGroup`, no fan-in wiring in your code — just single-item
+logic and a couple of options.
 
-This library is the **generics rewrite of [GoPipelines](https://github.com/pabloos/GoPipelines)**,
-a study of the [Go pipelines pattern](https://blog.golang.org/pipelines) I first
-wrote about on [my blog](https://pabloos.github.io/concurrency/pipelines/).
+## The idea
 
-That original code predates generics, so a pipeline was pinned to `int`: a stage
-was `func(Flow) Flow` where `Flow = chan Element{ value int }`. It was a clean
-demonstration of the pattern, but not something you could actually import.
+A pipeline is always the same shape: a producer at one end, a consumer at the
+other, work in the middle.
 
-Generics changed that. A stage is now `Stage[I, O]` — it **changes types** as
-data flows through it — errors are observable at the sink, and the API composes
-with the standard `iter.Seq` iterators. The pre-generics journey lives on in
-this repo's history (see the milestone branches and the `v1-legacy` tag).
+```mermaid
+flowchart LR
+    P(["Producer"]) --> R
+    subgraph R ["flow.Run — pool · ordering · back-pressure"]
+      direction LR
+      W1["Processor"]
+      W2["Processor"]
+      W3["Processor"]
+    end
+    R --> C(["Consumer"])
+```
+
+flow inverts control: instead of chaining channel operators yourself, you
+implement three small interfaces and hand them to `Run`, which owns the
+infrastructure. The design is inspired by Elixir's
+[GenStage](https://github.com/elixir-lang/gen_stage), adapted to idiomatic Go.
 
 ## Install
 
@@ -42,180 +51,117 @@ this repo's history (see the milestone branches and the `v1-legacy` tag).
 go get github.com/pabloos/flow
 ```
 
-Requires Go 1.23+ (for the `iter` bridges).
+Requires Go 1.23+.
 
-## Concepts
-
-A pipeline is built from three kinds of pieces:
-
-```mermaid
-flowchart LR
-    S(["Source"]) --> M["Map"] --> F["Filter"] --> K(["Sink"])
-```
-
-| Piece | What it is | Examples |
-|-------|-----------|----------|
-| **Source** | produces a `Stream[T]` | `Source`, `From` |
-| **Stage** | `func(Stream[I]) Stream[O]` | `Map`, `Filter`, `FlatMap` |
-| **Sink** | drains a `Stream[T]` | `Collect`, `CollectOrdered`, `ForEach`, `Reduce`, `Seq` |
-
-Each **box is a goroutine** and each **arrow is a typed channel**. `flow.New`
-wraps a context so that the first error cancels the whole pipeline (**fail-fast**)
-and surfaces at the sink.
-
-## Building pipelines
-
-### Sources
+## The three interfaces
 
 ```go
-flow.Source(ctx, 1, 2, 3)              // from values
-flow.From(ctx, slices.Values(nums))    // from a Go 1.23 iter.Seq
+type Producer[T any]     interface { Produce(ctx context.Context, emit func(T) error) error }
+type Processor[I, O any] interface { Process(ctx context.Context, in I, emit func(O) error) error }
+type Consumer[T any]     interface { Consume(ctx context.Context, v T) error }
 ```
 
-### Stages
+Implement them on a struct for stateful/complex ends, or pass a closure via the
+`*Func` adapters (the `http.HandlerFunc` trick) for quick ones.
+
+**One `Processor` is Map, Filter and FlatMap** — it depends on how many times
+you `emit`:
 
 ```go
-flow.Map(ctx, func(n int) (int, error) { return n * 2, nil })      // transform
-flow.Filter(ctx, func(n int) (bool, error) { return n > 0, nil })  // keep/drop
-flow.FlatMap(ctx, func(s string) ([]string, error) {               // expand 1->N
-    return strings.Fields(s), nil
+flow.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
+    if n < 0 { return nil }          // Filter: emit nothing
+    if err := emit(n); err != nil {  // Map: emit one
+        return err
+    }
+    return emit(n * 10)              // FlatMap: emit more
 })
 ```
 
-`FlatMap` turns each value into zero or more values. Siblings keep their
-parent's position plus a sub-index, so ordering is preserved downstream:
-
-```mermaid
-flowchart LR
-    A(["a"]) --> FM["FlatMap"]
-    B(["b"]) --> FM
-    FM --> A1["a·0"]
-    FM --> A2["a·1"]
-    FM --> B1["b·0"]
-```
-
-### Composition
-
-Go generics can't express a variadic of type-changing stages, so composition is
-explicit:
+For the common cases, terse constructors hide the `emit` closure (with fallible
+`Try*` variants):
 
 ```go
-// type-changing A -> B -> C: compose two at a time (or just nest calls)
-parseThenScale := flow.Then(
-    flow.Map(ctx, parse),   // string -> int
-    flow.Map(ctx, scale),   // int -> float64
+flow.Map(func(n int) int { return n * 2 })
+flow.Filter(func(n int) bool { return n > 0 })
+flow.FlatMap(func(s string) []string { return strings.Fields(s) })
+
+flow.TryMap(func(s string) (int, error) { return strconv.Atoi(s) })
+```
+
+## Composition
+
+`Then` composes processors **with no channel between them** — plain function
+composition, so multi-stage pipelines run in-process inside each worker:
+
+```go
+parse := flow.TryMap(strconv.Atoi)                    // string -> int
+scale := flow.Map(func(n int) float64 { return float64(n) * 1.5 })
+proc  := flow.Then(parse, scale)                      // Processor[string, float64]
+```
+
+## Concurrency and ordering
+
+Both are options on `Run` — your processor code stays single-item and oblivious:
+
+```go
+err := flow.Run(ctx, producer, proc, consumer,
+    flow.Workers(8),   // pool size (parallelism)
+    flow.Ordered(),    // reconstruct input order at the consumer
 )
-
-// same-type T -> T -> T: variadic works
-clean := flow.Chain(trim, dedupe, validate) // Stage[string, string]
 ```
 
-### Fan-out / fan-in with ordered results
+`Ordered()` restores the original input order even though workers finish at
+different times (and it survives `FlatMap` sibling expansion). Without it,
+outputs are consumed as they arrive. The consumer is always called from a single
+goroutine, so it needs no locks.
 
-The distinctive feature: parallelize work and still get the input order back.
-
-```mermaid
-flowchart LR
-    S(["Source"]) --> SC{"Scheduler"}
-    SC --> W1["worker"]
-    SC --> W2["worker"]
-    SC --> W3["worker"]
-    W1 --> FI["FanIn"]
-    W2 --> FI
-    W3 --> FI
-    FI --> K(["CollectOrdered"])
-```
+## Batteries-included ends
 
 ```go
-double := flow.Map(ctx, func(n int) (int, error) { return n * 2, nil })
-square := flow.Map(ctx, func(n int) (int, error) { return n * n, nil })
+flow.Slice(1, 2, 3)          // Producer from values
+flow.FromSeq(seq)            // Producer from a Go 1.23 iter.Seq
 
-in       := flow.Source(ctx, 1, 2, 3)
-branches := flow.FanOut(ctx, in, flow.RoundRobin(), []flow.Stage[int, int]{double, square})
-merged   := flow.FanIn(ctx, branches)
-
-out, _ := flow.CollectOrdered(ctx, merged, flow.InOrder) // [2 4 6] — deterministic
-```
-
-`FanOutN` replicates a single worker for data parallelism:
-
-```go
-branches := flow.FanOutN(ctx, in, 4, flow.LeastBusy(), worker, flow.WithBuffer(8))
-merged   := flow.FanIn(ctx, branches, flow.WithBuffer(16))
-```
-
-**Schedulers** decide which worker gets each element:
-
-| Scheduler | Behaviour |
-|-----------|-----------|
-| `RoundRobin()` | even distribution, one worker after another |
-| `Random()` | uniform random |
-| `LeastBusy()` | shortest input queue — routes around a slow worker (needs `WithBuffer`) |
-
-**Ordering.** Fan-out shuffles elements as they race through workers of
-different speeds; `CollectOrdered` restores the sequence from each element's
-origin position — surviving fan-out and `FlatMap` sibling expansion:
-
-```mermaid
-flowchart LR
-    M(["merged<br/>3 · 1 · 2"]) --> C["CollectOrdered(InOrder)"] --> O(["1 · 2 · 3"])
-```
-
-| Order | Result |
-|-------|--------|
-| `NoOrder` | arrival order (fastest, nondeterministic after fan-out) |
-| `InOrder` | original input order |
-| `Reverse` | input order reversed |
-
-### Sinks
-
-```go
-out, err := flow.Collect(ctx, s)                 // []T
-out, err := flow.CollectOrdered(ctx, s, flow.InOrder)
-err       = flow.ForEach(ctx, s, func(v T) error { ... })
-acc, err := flow.Reduce(ctx, s, 0, func(a, v int) int { return a + v })
-
-for v := range flow.Seq(s) { ... }               // bridge back to iter.Seq
+flow.Into(&results)          // Consumer that collects into a slice
+flow.Each(func(v T) error)   // Consumer that runs a func
 ```
 
 ## Errors and cancellation
 
-The first stage that returns an error cancels the shared context, unwinds every
-goroutine, and the error is returned from the sink:
-
-```mermaid
-flowchart LR
-    S(["Source"]) --> A["stage"] --> B["stage ✗"] --> K(["Sink"])
-    B -. cancels ctx .-> S
-    B -. cancels ctx .-> A
-```
+The first error from any end — producer, processor or consumer — cancels the
+whole pipeline (fail-fast) and is returned by `Run`:
 
 ```go
-ctx, cancel := flow.New(context.Background())
-defer cancel()
-
-out, err := flow.Collect(ctx, flow.Map(ctx, risky)(flow.Source(ctx, 1, 2, 3)))
-if err != nil { /* the whole pipeline stopped */ }
+err := flow.Run(ctx, prod, flow.TryMap(risky), sink)
+if err != nil { /* the pipeline stopped at the first failure */ }
 ```
 
-> Always build the context with `flow.New` (not `context.WithCancel`): that is
-> what installs the fail-fast coordinator the stages share.
+Back-pressure is implicit: `emit` blocks while the pipeline is saturated, all the
+way back to the producer.
 
-## Buffering
+## Prior art
 
-Channels are unbuffered by default (strict backpressure). `WithBuffer(n)` sizes
-the channel a stage, source, or fan-out produces:
+- [destel/rill](https://github.com/destel/rill) — composable channel operators with ordered variants; a great fit if you like the operator-chaining style.
+- [reugn/go-streams](https://github.com/reugn/go-streams) — Source/Flow/Sink DSL with many connectors (Kafka, NATS, …).
+- [Elixir GenStage](https://github.com/elixir-lang/gen_stage) — the demand-driven inspiration for the "implement the ends" model.
 
-```go
-flow.Map(ctx, fn, flow.WithBuffer(64))
-```
+flow's niche is the interface-driven ergonomics: you plug in the ends, it owns
+the pipes.
+
+## History
+
+flow began as the generics rewrite of [GoPipelines](https://github.com/pabloos/GoPipelines),
+a pre-generics study of the [Go pipelines pattern](https://blog.golang.org/pipelines).
+Its lineage is preserved in the repo:
+
+- `v1-legacy` tag — the original `int`-only pattern.
+- `channel-api` tag — the generics rewrite with an explicit channel/`Stage` API.
+- `main` — the current interface-driven design.
 
 ## Limitations
 
-- Nested `FlatMap` collapses ordering to the inner expansion (`Element` carries a
-  single sub-position).
-- `RoundRobin` distributes strictly, so a slow worker can stall it — use
-  `LeastBusy` with buffering to route around it.
+- Back-pressure is by blocking `emit`, not demand-driven like GenStage.
+- Multi-stage type changes compose two at a time (`Then`), a Go generics
+  constraint — turned into in-process, channel-free composition.
 
 ## License
 

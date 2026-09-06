@@ -1,4 +1,4 @@
-package pipe_test
+package flow_test
 
 import (
 	"context"
@@ -7,13 +7,13 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/pabloos/flow/x/pipe"
+	"github.com/pabloos/flow"
 )
 
 // One Processor interface does Map, Filter and FlatMap depending on how many
 // times it emits.
 func TestProcessorIsMapFilterFlatMap(t *testing.T) {
-	proc := pipe.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
+	proc := flow.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
 		if n%2 == 1 {
 			return nil // Filter: drop odds
 		}
@@ -24,7 +24,7 @@ func TestProcessorIsMapFilterFlatMap(t *testing.T) {
 	})
 
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice(1, 2, 3, 4), proc, pipe.Into(&got))
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3, 4), proc, flow.Into(&got))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestProcessorIsMapFilterFlatMap(t *testing.T) {
 
 // Ordered reconstructs input order across a worker pool.
 func TestOrderedFanOut(t *testing.T) {
-	double := pipe.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
+	double := flow.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
 		return emit(n * 2)
 	})
 
@@ -47,8 +47,8 @@ func TestOrderedFanOut(t *testing.T) {
 	}
 
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice(nums...), double, pipe.Into(&got),
-		pipe.Workers(4), pipe.Ordered())
+	err := flow.Run(context.Background(), flow.Slice(nums...), double, flow.Into(&got),
+		flow.Workers(4), flow.Ordered())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestOrderedFanOut(t *testing.T) {
 
 // Without Ordered, arrival order is nondeterministic but the multiset holds.
 func TestUnorderedSameSet(t *testing.T) {
-	ten := pipe.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
+	ten := flow.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
 		return emit(n * 10)
 	})
 
@@ -71,8 +71,8 @@ func TestUnorderedSameSet(t *testing.T) {
 	}
 
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice(nums...), ten, pipe.Into(&got),
-		pipe.Workers(6))
+	err := flow.Run(context.Background(), flow.Slice(nums...), ten, flow.Into(&got),
+		flow.Workers(6))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,17 +84,17 @@ func TestUnorderedSameSet(t *testing.T) {
 
 // Then composes two processors with a type change, in-process, no channel.
 func TestThenTypeChange(t *testing.T) {
-	length := pipe.ProcessorFunc[string, int](func(ctx context.Context, s string, emit func(int) error) error {
+	length := flow.ProcessorFunc[string, int](func(ctx context.Context, s string, emit func(int) error) error {
 		return emit(len(s))
 	})
-	label := pipe.ProcessorFunc[int, string](func(ctx context.Context, n int, emit func(string) error) error {
+	label := flow.ProcessorFunc[int, string](func(ctx context.Context, n int, emit func(string) error) error {
 		return emit(fmt.Sprintf("len=%d", n))
 	})
 
 	var got []string
-	err := pipe.Run(context.Background(), pipe.Slice("a", "bb", "ccc"),
-		pipe.Then(length, label), pipe.Into(&got),
-		pipe.Workers(3), pipe.Ordered())
+	err := flow.Run(context.Background(), flow.Slice("a", "bb", "ccc"),
+		flow.Then(length, label), flow.Into(&got),
+		flow.Workers(3), flow.Ordered())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestThenTypeChange(t *testing.T) {
 
 func TestProcessorErrorFailFast(t *testing.T) {
 	boom := errors.New("boom")
-	proc := pipe.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
+	proc := flow.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
 		if n == 3 {
 			return boom
 		}
@@ -113,8 +113,8 @@ func TestProcessorErrorFailFast(t *testing.T) {
 	})
 
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice(1, 2, 3, 4, 5), proc, pipe.Into(&got),
-		pipe.Workers(2))
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3, 4, 5), proc, flow.Into(&got),
+		flow.Workers(2))
 	if !errors.Is(err, boom) {
 		t.Fatalf("want boom, got %v", err)
 	}
@@ -122,31 +122,31 @@ func TestProcessorErrorFailFast(t *testing.T) {
 
 func TestConsumerErrorFailFast(t *testing.T) {
 	boom := errors.New("sink failed")
-	identity := pipe.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
+	identity := flow.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
 		return emit(n)
 	})
-	sink := pipe.Each(func(n int) error {
+	sink := flow.Each(func(n int) error {
 		if n == 3 {
 			return boom
 		}
 		return nil
 	})
 
-	err := pipe.Run(context.Background(), pipe.Slice(1, 2, 3, 4, 5), identity, sink)
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3, 4, 5), identity, sink)
 	if !errors.Is(err, boom) {
 		t.Fatalf("want boom, got %v", err)
 	}
 }
 
 func TestFromSeqProducer(t *testing.T) {
-	square := pipe.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
+	square := flow.ProcessorFunc[int, int](func(ctx context.Context, n int, emit func(int) error) error {
 		return emit(n * n)
 	})
 
 	var got []int
-	err := pipe.Run(context.Background(),
-		pipe.FromSeq(slices.Values([]int{2, 3, 4})), square, pipe.Into(&got),
-		pipe.Ordered())
+	err := flow.Run(context.Background(),
+		flow.FromSeq(slices.Values([]int{2, 3, 4})), square, flow.Into(&got),
+		flow.Ordered())
 	if err != nil {
 		t.Fatal(err)
 	}

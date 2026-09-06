@@ -1,4 +1,4 @@
-package pipe_test
+package flow_test
 
 import (
 	"context"
@@ -6,14 +6,14 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/pabloos/flow/x/pipe"
+	"github.com/pabloos/flow"
 )
 
 func TestMapConstructor(t *testing.T) {
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice(1, 2, 3),
-		pipe.Map(func(n int) int { return n * 2 }), pipe.Into(&got),
-		pipe.Workers(3), pipe.Ordered())
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3),
+		flow.Map(func(n int) int { return n * 2 }), flow.Into(&got),
+		flow.Workers(3), flow.Ordered())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,9 +24,9 @@ func TestMapConstructor(t *testing.T) {
 
 func TestFilterConstructor(t *testing.T) {
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice(1, 2, 3, 4, 5, 6),
-		pipe.Filter(func(n int) bool { return n%2 == 0 }), pipe.Into(&got),
-		pipe.Ordered())
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3, 4, 5, 6),
+		flow.Filter(func(n int) bool { return n%2 == 0 }), flow.Into(&got),
+		flow.Ordered())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,9 +37,9 @@ func TestFilterConstructor(t *testing.T) {
 
 func TestFlatMapConstructor(t *testing.T) {
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice(1, 2, 3),
-		pipe.FlatMap(func(n int) []int { return []int{n, -n} }), pipe.Into(&got),
-		pipe.Ordered())
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3),
+		flow.FlatMap(func(n int) []int { return []int{n, -n} }), flow.Into(&got),
+		flow.Ordered())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,13 +50,13 @@ func TestFlatMapConstructor(t *testing.T) {
 
 // The terse constructors compose with Then, mixing type-changing stages.
 func TestConstructorsComposeWithThen(t *testing.T) {
-	length := pipe.Map(func(s string) int { return len(s) })
-	big := pipe.Filter(func(n int) bool { return n > 1 })
+	length := flow.Map(func(s string) int { return len(s) })
+	big := flow.Filter(func(n int) bool { return n > 1 })
 
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice("a", "bb", "ccc"),
-		pipe.Then(length, big), pipe.Into(&got),
-		pipe.Workers(2), pipe.Ordered())
+	err := flow.Run(context.Background(), flow.Slice("a", "bb", "ccc"),
+		flow.Then(length, big), flow.Into(&got),
+		flow.Workers(2), flow.Ordered())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestConstructorsComposeWithThen(t *testing.T) {
 
 func TestTryMapError(t *testing.T) {
 	boom := errors.New("boom")
-	proc := pipe.TryMap(func(n int) (int, error) {
+	proc := flow.TryMap(func(n int) (int, error) {
 		if n == 3 {
 			return 0, boom
 		}
@@ -75,8 +75,8 @@ func TestTryMapError(t *testing.T) {
 	})
 
 	var got []int
-	err := pipe.Run(context.Background(), pipe.Slice(1, 2, 3, 4), proc, pipe.Into(&got),
-		pipe.Workers(2))
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3, 4), proc, flow.Into(&got),
+		flow.Workers(2))
 	if !errors.Is(err, boom) {
 		t.Fatalf("want boom, got %v", err)
 	}
@@ -85,24 +85,24 @@ func TestTryMapError(t *testing.T) {
 func TestTryFilterAndTryFlatMapError(t *testing.T) {
 	boom := errors.New("bad")
 
-	err := pipe.Run(context.Background(), pipe.Slice(1, 2, 3),
-		pipe.TryFilter(func(n int) (bool, error) {
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3),
+		flow.TryFilter(func(n int) (bool, error) {
 			if n == 2 {
 				return false, boom
 			}
 			return true, nil
-		}), pipe.Into(new([]int)))
+		}), flow.Into(new([]int)))
 	if !errors.Is(err, boom) {
 		t.Fatalf("TryFilter: want boom, got %v", err)
 	}
 
-	err = pipe.Run(context.Background(), pipe.Slice(1, 2, 3),
-		pipe.TryFlatMap(func(n int) ([]int, error) {
+	err = flow.Run(context.Background(), flow.Slice(1, 2, 3),
+		flow.TryFlatMap(func(n int) ([]int, error) {
 			if n == 2 {
 				return nil, boom
 			}
 			return []int{n}, nil
-		}), pipe.Into(new([]int)))
+		}), flow.Into(new([]int)))
 	if !errors.Is(err, boom) {
 		t.Fatalf("TryFlatMap: want boom, got %v", err)
 	}

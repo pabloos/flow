@@ -1,10 +1,11 @@
-// Package pipe is an experimental, interface-driven take on flow: you implement
-// the ends (Producer, Processor, Consumer) and pipe owns the concurrency,
-// ordering, back-pressure and cancellation. Inspired by Elixir's GenStage, but
-// with push+blocking back-pressure and global order reconstruction.
+// Package flow is an interface-driven library for concurrent pipelines: you
+// implement the ends — Producer, Processor and Consumer (or pass a closure via
+// the *Func adapters) — and flow owns the concurrency, ordering, back-pressure
+// and fail-fast cancellation.
 //
-// This is a prototype exploring ergonomics; it is not the stable flow API.
-package pipe
+// Inspired by Elixir's GenStage, but with push+blocking back-pressure and
+// streaming reconstruction of the global input order.
+package flow
 
 import "context"
 
