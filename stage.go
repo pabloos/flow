@@ -1,32 +1,5 @@
-package pipelines
+package flow
 
-import "context"
-
-type (
-	// Stage represents the different phases of a Pipeline, which it's a Stage itself
-	Stage func(Flow) Flow
-
-	stages []Stage
-)
-
-func genStages(ctx context.Context, errChs []errorChannel, functors ...functor) stages {
-	stages := make(stages, 0)
-
-	for i, functor := range functors {
-		stages = append(stages, getStage(ctx, errChs[i], functor))
-	}
-
-	return stages
-}
-
-func getStage(ctx context.Context, errCh errorChannel, funct functor) Stage {
-	sender := sendAndClose(send, closeFlow)
-
-	return func(input Flow) Flow {
-		output := make(Flow)
-
-		go sender(ctx, errCh, output, input, funct)
-
-		return output
-	}
-}
+// Stage transforms one Stream into another, possibly changing the element type.
+// The context is captured at construction time.
+type Stage[I, O any] func(Stream[I]) Stream[O]

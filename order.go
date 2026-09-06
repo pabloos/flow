@@ -1,28 +1,14 @@
-package pipelines
+package flow
 
-// Order returns a slice with the elements ordered
-type Order func([]Element) Less
+// Order controls how CollectOrdered arranges results relative to the input.
+type Order int
 
-// Less is the type used in the sort goland std lib to order slices
-type Less func(i, j int) bool
-
-// NoOrder returns a Less function for sort golang func "in order" to get the same order
-func NoOrder(elements []Element) Less {
-	return func(i, j int) bool {
-		return elements[i].orderNum == elements[j].orderNum
-	}
-}
-
-// InOrder returns a Less function for sort golang func "in order" to get an ascending orderNum order
-func InOrder(elements []Element) Less {
-	return func(i, j int) bool {
-		return elements[i].orderNum < elements[j].orderNum
-	}
-}
-
-// Reverse returns a Less function for sort golang func "in order" to get an descending orderNum order
-func Reverse(elements []Element) Less {
-	return func(i, j int) bool {
-		return elements[i].orderNum > elements[j].orderNum
-	}
-}
+const (
+	// NoOrder returns results in arrival order: fastest, but nondeterministic
+	// after a fan-out.
+	NoOrder Order = iota
+	// InOrder restores the original input order (deterministic).
+	InOrder
+	// Reverse returns the input order reversed (deterministic).
+	Reverse
+)

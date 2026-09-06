@@ -1,3 +1,3 @@
-module github.com/pabloos/my-go-pipeline-pattern
+module github.com/pabloos/flow
 
-go 1.13
+go 1.23
