@@ -6,8 +6,9 @@ import (
 )
 
 type config struct {
-	workers int
-	ordered bool
+	workers  int
+	ordered  bool
+	prefetch int
 }
 
 // Option configures a Run.
@@ -28,6 +29,17 @@ func Ordered() Option {
 	return func(c *config) { c.ordered = true }
 }
 
+// Prefetch sets how many items may be queued ahead of the workers (the
+// in-flight window), letting the producer run ahead instead of lock-stepping
+// with the pool. Default 0 (unbuffered: strict lock-step).
+func Prefetch(n int) Option {
+	return func(c *config) {
+		if n > 0 {
+			c.prefetch = n
+		}
+	}
+}
+
 type seqItem[T any] struct {
 	seq uint64
 	val T
@@ -44,6 +56,13 @@ type batch[O any] struct {
 // concurrency, ordering, back-pressure and fail-fast cancellation. It returns
 // the first error from any end, or nil.
 func Run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c Consumer[O], opts ...Option) error {
+	return run(ctx, p, proc, c, nil, opts...)
+}
+
+// run is the shared engine. When partition is non-nil, each input is routed to
+// a dedicated worker channel by partition(value) % workers; otherwise all
+// workers share one channel (work-stealing).
+func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c Consumer[O], partition func(I) uint64, opts ...Option) error {
 	cfg := config{workers: 1}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -65,11 +84,11 @@ func Run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		}
 	}
 
-	in := make(chan seqItem[I])
+	in := make(chan seqItem[I], cfg.prefetch)
 	done := make(chan batch[O])
 
 	// Producer: assigns a contiguous sequence number to every value. emit
-	// blocks (back-pressure) until a worker is ready.
+	// blocks (back-pressure) until there is room.
 	var prodWG sync.WaitGroup
 	prodWG.Add(1)
 	go func() {
@@ -90,27 +109,56 @@ func Run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		}
 	}()
 
-	// Worker pool: each input is processed fully by one worker, whose outputs
-	// are gathered into a single batch (contiguous, so order can be restored).
+	// A worker processes each input fully, gathering its outputs into one batch
+	// (contiguous, so order can be restored).
 	var workWG sync.WaitGroup
-	for i := 0; i < cfg.workers; i++ {
-		workWG.Add(1)
-		go func() {
-			defer workWG.Done()
-			for it := range in {
-				var outs []O
-				err := proc.Process(ctx, it.val, func(o O) error {
-					outs = append(outs, o)
-					return nil
-				})
-				if err != nil {
-					if ctx.Err() == nil {
-						fail(err)
-					}
-					return
+	worker := func(input <-chan seqItem[I]) {
+		defer workWG.Done()
+		for it := range input {
+			var outs []O
+			err := proc.Process(ctx, it.val, func(o O) error {
+				outs = append(outs, o)
+				return nil
+			})
+			if err != nil {
+				if ctx.Err() == nil {
+					fail(err)
 				}
+				return
+			}
+			select {
+			case done <- batch[O]{seq: it.seq, outs: outs}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+
+	if partition == nil {
+		// Shared channel: work-stealing across the pool.
+		for i := 0; i < cfg.workers; i++ {
+			workWG.Add(1)
+			go worker(in)
+		}
+	} else {
+		// Per-worker channels: route by key so a key is never processed
+		// concurrently and keeps its order.
+		ins := make([]chan seqItem[I], cfg.workers)
+		for w := range ins {
+			ins[w] = make(chan seqItem[I], cfg.prefetch)
+			workWG.Add(1)
+			go worker(ins[w])
+		}
+		go func() {
+			defer func() {
+				for _, ch := range ins {
+					close(ch)
+				}
+			}()
+			for it := range in {
+				w := int(partition(it.val) % uint64(cfg.workers))
 				select {
-				case done <- batch[O]{seq: it.seq, outs: outs}:
+				case ins[w] <- it:
 				case <-ctx.Done():
 					return
 				}
@@ -123,8 +171,7 @@ func Run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		close(done)
 	}()
 
-	// Collector: the single goroutine that calls the consumer. Delivers in
-	// arrival order, or reorders by sequence when Ordered is set.
+	// Collector: the single goroutine that calls the consumer.
 	stopped := false
 	deliver := func(o O) {
 		if stopped {

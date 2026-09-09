@@ -105,8 +105,9 @@ Both are options on `Run` — your processor code stays single-item and obliviou
 
 ```go
 err := flow.Run(ctx, producer, proc, consumer,
-    flow.Workers(8),   // pool size (parallelism)
-    flow.Ordered(),    // reconstruct input order at the consumer
+    flow.Workers(8),    // pool size (parallelism)
+    flow.Ordered(),     // reconstruct input order at the consumer
+    flow.Prefetch(64),  // in-flight window: let the producer run ahead
 )
 ```
 
@@ -114,6 +115,23 @@ err := flow.Run(ctx, producer, proc, consumer,
 different times (and it survives `FlatMap` sibling expansion). Without it,
 outputs are consumed as they arrive. The consumer is always called from a single
 goroutine, so it needs no locks.
+
+### Keyed ordering
+
+`RunPartitioned` routes every input to a worker by key, so all values with the
+same key go to the same worker and are processed in order — a given key is never
+processed concurrently. Use it for per-key ordering or processors that keep
+per-key state:
+
+```go
+err := flow.RunPartitioned(ctx, producer, proc, consumer,
+    func(e Event) string { return e.UserID }, // same user -> same worker, in order
+    flow.Workers(8),
+)
+```
+
+Combine it with `Ordered()` to also restore the global input order at the
+consumer; on its own it only guarantees order within each key.
 
 ## Batteries-included ends
 
