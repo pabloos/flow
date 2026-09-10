@@ -2,6 +2,7 @@ package flow_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,5 +89,23 @@ func TestBottleneckProducer(t *testing.T) {
 	}
 	if rep.Bottleneck != flow.StageProducer {
 		t.Fatalf("want producer, got %s\n%s", rep.Bottleneck, &rep)
+	}
+}
+
+func TestReportStringAndUtil(t *testing.T) {
+	r := flow.Report{
+		Wall: 100 * time.Millisecond, Workers: 2,
+		Produced: 10, Processed: 10, Emitted: 10, Consumed: 10,
+		WorkerBusy: 180 * time.Millisecond, // 180 / (2*100) = 0.9
+		Bottleneck: flow.StageProcessor, Advice: "raise Workers()",
+	}
+	if u := r.Util(); u < 0.89 || u > 0.91 {
+		t.Fatalf("util = %v, want ~0.9", u)
+	}
+	s := r.String()
+	for _, want := range []string{"flow report", "2 workers", "processor", "PROCESSOR", "raise Workers()"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("String() missing %q:\n%s", want, s)
+		}
 	}
 }
