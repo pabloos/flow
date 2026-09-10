@@ -31,6 +31,8 @@ func (s Stage) String() string {
 
 // Report is a snapshot of a run's performance, filled in when Observe is set.
 // Timings for the processor are summed across all workers.
+//
+// Experimental: this type may change in a future v0.x release.
 type Report struct {
 	Wall    time.Duration
 	Workers int

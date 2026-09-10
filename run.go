@@ -45,6 +45,9 @@ func Prefetch(n int) Option {
 // Observe fills dst with a performance Report after the run: per-stage timings,
 // counts and a diagnosed bottleneck. Opt-in — it adds timing to the hot path,
 // so leave it off in production.
+//
+// Experimental: the observability API (Observe and Report) may change in a
+// future v0.x release.
 func Observe(dst *Report) Option {
 	return func(c *config) { c.observe = dst }
 }
