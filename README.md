@@ -62,7 +62,17 @@ type Consumer[T any]     interface { Consume(ctx context.Context, v T) error }
 ```
 
 Implement them on a struct for stateful/complex ends, or pass a closure via the
-`*Func` adapters (the `http.HandlerFunc` trick) for quick ones.
+`*Func` adapters (the `http.HandlerFunc` trick) for quick ones:
+
+```go
+// A struct end carries state; the consumer runs single-threaded, so no locks.
+type Sum struct{ total int }
+
+func (s *Sum) Consume(ctx context.Context, n int) error {
+    s.total += n
+    return nil
+}
+```
 
 **One `Processor` is Map, Filter and FlatMap** — it depends on how many times
 you `emit`:
@@ -98,6 +108,48 @@ parse := flow.TryMap(strconv.Atoi)                    // string -> int
 scale := flow.Map(func(n int) float64 { return float64(n) * 1.5 })
 proc  := flow.Then(parse, scale)                      // Processor[string, float64]
 ```
+
+## A complete program
+
+Parse strings to ints, keep the positives and double them — in parallel, with
+the output order preserved:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+
+	"github.com/pabloos/flow"
+)
+
+func main() {
+	pipeline := flow.Then(
+		flow.TryMap(strconv.Atoi),
+		flow.Then(
+			flow.Filter(func(n int) bool { return n > 0 }),
+			flow.Map(func(n int) int { return n * 2 }),
+		),
+	)
+
+	var out []int
+	err := flow.Run(context.Background(),
+		flow.Slice("1", "-2", "3", "4"),
+		pipeline,
+		flow.Into(&out),
+		flow.Workers(4), flow.Ordered(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(out) // [2 6 8]
+}
+```
+
+More runnable examples live in the [package docs](https://pkg.go.dev/github.com/pabloos/flow#pkg-examples)
+(they run in CI, so they never go stale).
 
 ## Concurrency and ordering
 
