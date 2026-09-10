@@ -3,12 +3,14 @@ package flow
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 type config struct {
 	workers  int
 	ordered  bool
 	prefetch int
+	observe  *Report
 }
 
 // Option configures a Run.
@@ -38,6 +40,13 @@ func Prefetch(n int) Option {
 			c.prefetch = n
 		}
 	}
+}
+
+// Observe fills dst with a performance Report after the run: per-stage timings,
+// counts and a diagnosed bottleneck. Opt-in — it adds timing to the hot path,
+// so leave it off in production.
+func Observe(dst *Report) Option {
+	return func(c *config) { c.observe = dst }
 }
 
 type seqItem[T any] struct {
@@ -72,6 +81,15 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 	defer cancel()
 
 	var (
+		pr    *probe
+		start time.Time
+	)
+	if cfg.observe != nil {
+		pr = &probe{}
+		start = time.Now()
+	}
+
+	var (
 		errOnce  sync.Once
 		firstErr error
 	)
@@ -88,7 +106,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 	done := make(chan batch[O])
 
 	// Producer: assigns a contiguous sequence number to every value. emit
-	// blocks (back-pressure) until there is room.
+	// blocks (back-pressure) until there is room; that block is measured.
 	var prodWG sync.WaitGroup
 	prodWG.Add(1)
 	go func() {
@@ -96,8 +114,11 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		defer close(in)
 		var seq uint64
 		err := p.Produce(ctx, func(v I) error {
+			t := pr.now()
 			select {
 			case in <- seqItem[I]{seq: seq, val: v}:
+				pr.prodBlockedSince(t)
+				pr.incProduced()
 				seq++
 				return nil
 			case <-ctx.Done():
@@ -109,25 +130,40 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		}
 	}()
 
-	// A worker processes each input fully, gathering its outputs into one batch
-	// (contiguous, so order can be restored).
+	// A worker processes each input fully, gathering its outputs into one batch.
+	// Its time splits into idle (waiting for input), busy (Process) and blocked
+	// (waiting for the consumer) — the signals that localize the bottleneck.
 	var workWG sync.WaitGroup
 	worker := func(input <-chan seqItem[I]) {
 		defer workWG.Done()
-		for it := range input {
+		for {
+			t := pr.now()
+			it, ok := <-input
+			if !ok {
+				return
+			}
+			pr.idleSince(t)
+
+			tb := pr.now()
 			var outs []O
 			err := proc.Process(ctx, it.val, func(o O) error {
 				outs = append(outs, o)
 				return nil
 			})
+			pr.busySince(tb)
+			pr.incProcessed()
+			pr.addEmitted(len(outs))
 			if err != nil {
 				if ctx.Err() == nil {
 					fail(err)
 				}
 				return
 			}
+
+			tw := pr.now()
 			select {
 			case done <- batch[O]{seq: it.seq, outs: outs}:
+				pr.blockedSince(tw)
 			case <-ctx.Done():
 				return
 			}
@@ -177,7 +213,11 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		if stopped {
 			return
 		}
-		if err := c.Consume(ctx, o); err != nil {
+		t := pr.now()
+		err := c.Consume(ctx, o)
+		pr.consumeSince(t)
+		pr.incConsumed()
+		if err != nil {
 			fail(err)
 			stopped = true
 		}
@@ -209,5 +249,9 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 	}
 
 	prodWG.Wait()
+
+	if cfg.observe != nil {
+		*cfg.observe = pr.report(cfg.workers, time.Since(start))
+	}
 	return firstErr
 }

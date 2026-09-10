@@ -208,6 +208,33 @@ if err != nil { /* the pipeline stopped at the first failure */ }
 Back-pressure is implicit: `emit` blocks while the pipeline is saturated, all the
 way back to the producer.
 
+## Profiling & bottlenecks
+
+Because flow owns the infrastructure, it can profile it for you — with no
+instrumentation in your code. Pass `Observe` to fill a `Report` that pinpoints
+the bottleneck:
+
+```go
+var rep flow.Report
+err := flow.Run(ctx, prod, proc, cons, flow.Workers(8), flow.Observe(&rep))
+fmt.Println(&rep)
+```
+
+```
+flow report — wall 60ms · 8 workers
+  producer   2000 items   blocked 59ms
+  processor  2000 in / 2000 out   busy 468ms  idle 2ms  blocked 8ms  · 98% util
+  consumer   2000 items   busy 0s
+  → bottleneck: PROCESSOR
+    processor-bound: raise Workers() or optimize Process
+```
+
+flow triangulates by where the workers spend their time — **idle** (producer too
+slow), **busy** (the work itself) or **blocked** (consumer too slow) — so
+`rep.Bottleneck` is one of `StageProducer` / `StageProcessor` / `StageConsumer`,
+with matching `Advice`. `Observe` is opt-in; with it off, the hot path pays
+nothing.
+
 ## Prior art
 
 - [destel/rill](https://github.com/destel/rill) — composable channel operators with ordered variants; a great fit if you like the operator-chaining style.
