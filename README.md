@@ -254,6 +254,17 @@ Its lineage is preserved in the repo:
 - `channel-api` tag — the generics rewrite with an explicit channel/`Stage` API.
 - `main` — the current interface-driven design.
 
+## Roadmap
+
+Observability grows without breaking the core's zero-dependency promise:
+
+- **In core** (stdlib only): a richer `Report` — percentiles, per-worker
+  breakdown, queue-depth sampling.
+- **Separate modules** (own `go.mod`, opt-in): metrics exporters live under
+  `flow/x/…` so importing the core never pulls their dependencies. The core will
+  expose a small hook interface; concrete exporters (Prometheus, OpenTelemetry)
+  implement it in their own modules.
+
 ## Limitations
 
 - Back-pressure is by blocking `emit`, not demand-driven like GenStage.
