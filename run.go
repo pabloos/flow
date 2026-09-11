@@ -91,7 +91,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		start time.Time
 	)
 	if cfg.observe != nil {
-		pr = &probe{}
+		pr = newProbe(cfg.workers)
 		start = time.Now()
 	}
 
@@ -146,25 +146,25 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 	// Its time splits into idle (waiting for input), busy (Process) and blocked
 	// (waiting for the consumer) — the signals that localize the bottleneck.
 	var workWG sync.WaitGroup
-	worker := func(input <-chan seqItem[I]) {
+	worker := func(idx int, input <-chan seqItem[I]) {
 		defer workWG.Done()
+		wp := pr.wp(idx)
 		for {
-			t := pr.now()
+			t := wp.now()
 			it, ok := <-input
 			if !ok {
 				return
 			}
-			pr.idleSince(t)
+			wp.addIdle(t)
 
-			tb := pr.now()
+			tb := wp.now()
 			var outs []O
 			err := proc.Process(ctx, it.val, func(o O) error {
 				outs = append(outs, o)
 				return nil
 			})
-			pr.busySince(tb)
-			pr.incProcessed()
-			pr.addEmitted(len(outs))
+			wp.addBusy(tb)
+			wp.addEmitted(len(outs))
 			if err != nil {
 				if ctx.Err() == nil {
 					fail(err)
@@ -172,10 +172,10 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 				return
 			}
 
-			tw := pr.now()
+			tw := wp.now()
 			select {
 			case done <- batch[O]{seq: it.seq, outs: outs}:
-				pr.blockedSince(tw)
+				wp.addBlocked(tw)
 			case <-ctx.Done():
 				return
 			}
@@ -186,7 +186,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		// Shared channel: work-stealing across the pool.
 		for i := 0; i < cfg.workers; i++ {
 			workWG.Add(1)
-			go worker(in)
+			go worker(i, in)
 		}
 	} else {
 		// Per-worker channels: route by key so a key is never processed
@@ -195,7 +195,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		for w := range ins {
 			ins[w] = make(chan seqItem[I], cfg.prefetch)
 			workWG.Add(1)
-			go worker(ins[w])
+			go worker(w, ins[w])
 		}
 		go func() {
 			defer func() {
