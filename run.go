@@ -80,6 +80,9 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		opt(&cfg)
 	}
 
+	// parent is kept so we can tell "the caller cancelled us" apart from
+	// "we cancelled ourselves after an error": fail() cancels ctx, never parent.
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -255,6 +258,15 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 
 	if cfg.observe != nil {
 		*cfg.observe = pr.report(cfg.workers, time.Since(start))
+	}
+
+	// A cancelled caller must not get a clean nil back. The producer and the
+	// workers bail out quietly on ctx.Done() by design — nobody records that as
+	// a failure — so without this the caller cannot tell a truncated run from a
+	// finished one. A genuine pipeline error still wins: it is already in
+	// firstErr by the time anything cancels.
+	if firstErr == nil {
+		return parent.Err()
 	}
 	return firstErr
 }

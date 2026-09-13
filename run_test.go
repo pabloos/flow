@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/pabloos/flow"
 )
@@ -153,4 +154,95 @@ func TestFromSeqProducer(t *testing.T) {
 	if want := []int{4, 9, 16}; !slices.Equal(got, want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
+}
+
+// A cancelled caller context must come back as an error: otherwise Run returns
+// nil after consuming only part of the input and the caller cannot tell a
+// truncated run from a finished one.
+func TestCancelledContextIsReported(t *testing.T) {
+	double := flow.Map(func(n int) int { return n * 2 })
+
+	t.Run("cancelled before the run starts", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		var out []int
+		err := flow.Run(ctx, flow.Slice(1, 2, 3, 4, 5), double, flow.Into(&out))
+
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if len(out) != 0 {
+			t.Fatalf("consumed %d values with a dead context, want 0", len(out))
+		}
+	})
+
+	t.Run("cancelled midway", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var out []int
+		err := flow.Run(ctx, flow.Slice(1, 2, 3, 4, 5, 6, 7, 8), double,
+			flow.ConsumerFunc[int](func(_ context.Context, v int) error {
+				out = append(out, v)
+				if len(out) == 2 {
+					cancel()
+				}
+				return nil
+			}))
+
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if len(out) == 8 {
+			t.Fatal("consumed the whole input after cancelling midway")
+		}
+	})
+
+	t.Run("deadline exceeded", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+
+		slow := flow.Map(func(n int) int {
+			time.Sleep(20 * time.Millisecond)
+			return n
+		})
+
+		var out []int
+		err := flow.Run(ctx, flow.Slice(1, 2, 3, 4, 5, 6, 7, 8), slow, flow.Into(&out))
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+		}
+	})
+
+	t.Run("a pipeline error wins over cancellation", func(t *testing.T) {
+		boom := errors.New("boom")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var out []int
+		err := flow.Run(ctx, flow.Slice(1, 2, 3, 4, 5),
+			flow.TryMap(func(n int) (int, error) {
+				if n == 3 {
+					return 0, boom
+				}
+				return n, nil
+			}),
+			flow.Into(&out))
+
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want boom", err)
+		}
+	})
+
+	t.Run("an uncancelled run still returns nil", func(t *testing.T) {
+		var out []int
+		if err := flow.Run(context.Background(), flow.Slice(1, 2, 3), double, flow.Into(&out)); err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if len(out) != 3 {
+			t.Fatalf("consumed %d values, want 3", len(out))
+		}
+	})
 }
