@@ -120,6 +120,12 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		defer close(in)
 		var seq uint64
 		err := p.Produce(ctx, func(v I) error {
+			// A context that is already dead must consume nothing: without this,
+			// the select below can still pick the send when a worker is parked,
+			// leaking one value past cancellation.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			t := pr.now()
 			select {
 			case in <- seqItem[I]{seq: seq, val: v}:
