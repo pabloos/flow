@@ -109,3 +109,64 @@ func TestReportStringAndUtil(t *testing.T) {
 		}
 	}
 }
+
+func TestObservePercentiles(t *testing.T) {
+	var rep flow.Report
+	err := flow.Run(context.Background(), flow.Slice(rangeN(200)...),
+		flow.Map(func(x int) int { time.Sleep(time.Millisecond); return x }),
+		flow.Into(new([]int)),
+		flow.Workers(4), flow.Observe(&rep))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := rep.ProcessLatency
+	if !(l.P50 > 0 && l.P95 >= l.P50 && l.P99 >= l.P95 && l.Max >= l.P99) {
+		t.Fatalf("percentiles not monotonic: %+v", l)
+	}
+	// each Process sleeps ~1ms; p50 should be in a generous band
+	if l.P50 < 500*time.Microsecond || l.P50 > 25*time.Millisecond {
+		t.Fatalf("p50 = %s, want ~1ms", l.P50)
+	}
+}
+
+func TestPerWorkerBreakdown(t *testing.T) {
+	var rep flow.Report
+	n := 200
+	err := flow.Run(context.Background(), flow.Slice(rangeN(n)...),
+		flow.Map(func(x int) int { return x }),
+		flow.Into(new([]int)),
+		flow.Workers(4), flow.Observe(&rep))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.PerWorker) != 4 {
+		t.Fatalf("PerWorker len = %d, want 4", len(rep.PerWorker))
+	}
+	var total int64
+	for _, w := range rep.PerWorker {
+		total += w.Processed
+	}
+	if total != int64(n) {
+		t.Fatalf("per-worker processed sum = %d, want %d", total, n)
+	}
+}
+
+func TestObserveReportStringFull(t *testing.T) {
+	var rep flow.Report
+	err := flow.Run(context.Background(), flow.Slice(rangeN(5000)...), // > reservoir cap
+		flow.Map(func(x int) int { return x }),
+		flow.Into(new([]int)),
+		flow.Workers(4), flow.Observe(&rep))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Processed != 5000 {
+		t.Fatalf("processed = %d, want 5000", rep.Processed)
+	}
+	s := rep.String()
+	for _, want := range []string{"latency", "balance", "4 workers"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("String() missing %q:\n%s", want, s)
+		}
+	}
+}

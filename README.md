@@ -221,10 +221,12 @@ fmt.Println(&rep)
 ```
 
 ```
-flow report — wall 60ms · 8 workers
-  producer   2000 items   blocked 59ms
-  processor  2000 in / 2000 out   busy 468ms  idle 2ms  blocked 8ms  · 98% util
-  consumer   2000 items   busy 0s
+flow report — wall 104ms · 8 workers
+  producer   3000 items   blocked 101ms
+  processor  3000 in / 3000 out   busy 810ms  idle 1ms  blocked 4ms  · 98% util
+             latency  p50 120µs  p95 3.004ms  p99 3.025ms  max 3.14ms
+             balance  busy 101ms–103ms across 8 workers
+  consumer   3000 items   busy 0s
   → bottleneck: PROCESSOR
     processor-bound: raise Workers() or optimize Process
 ```
@@ -232,8 +234,10 @@ flow report — wall 60ms · 8 workers
 flow triangulates by where the workers spend their time — **idle** (producer too
 slow), **busy** (the work itself) or **blocked** (consumer too slow) — so
 `rep.Bottleneck` is one of `StageProducer` / `StageProcessor` / `StageConsumer`,
-with matching `Advice`. `Observe` is opt-in; with it off, the hot path pays
-nothing.
+with matching `Advice`. The **latency** line exposes the Process tail (here p50
+is 120µs but p95 jumps to 3ms — a spike a mean would hide), and **balance**
+flags uneven workers; the full data is in `rep.ProcessLatency` and
+`rep.PerWorker`. `Observe` is opt-in; with it off, the hot path pays nothing.
 
 ## Prior art
 
