@@ -239,6 +239,21 @@ is 120µs but p95 jumps to 3ms — a spike a mean would hide), and **balance**
 flags uneven workers; the full data is in `rep.ProcessLatency` and
 `rep.PerWorker`. `Observe` is opt-in; with it off, the hot path pays nothing.
 
+### Streaming metrics
+
+`Observe` is a one-shot snapshot; for live metrics during a run — and for
+long-lived pipelines that never "end" — implement `Meter` and pass `WithMeter`.
+flow records the counters `produced` / `processed` / `emitted` / `consumed` and
+the `process_latency` histogram to your instruments:
+
+```go
+err := flow.Run(ctx, prod, proc, cons, flow.Workers(8), flow.WithMeter(m))
+```
+
+`Meter` is deliberately tiny (instrument-based, à la OpenTelemetry) so the core
+stays zero-dependency; concrete exporters (Prometheus, OpenTelemetry) live in
+separate submodules under `flow/x/…`.
+
 ## Prior art
 
 - [destel/rill](https://github.com/destel/rill) — composable channel operators with ordered variants; a great fit if you like the operator-chaining style.
@@ -262,12 +277,11 @@ Its lineage is preserved in the repo:
 
 Observability grows without breaking the core's zero-dependency promise:
 
-- **In core** (stdlib only): a richer `Report` — percentiles, per-worker
-  breakdown, queue-depth sampling.
-- **Separate modules** (own `go.mod`, opt-in): metrics exporters live under
-  `flow/x/…` so importing the core never pulls their dependencies. The core will
-  expose a small hook interface; concrete exporters (Prometheus, OpenTelemetry)
-  implement it in their own modules.
+- **In core** (stdlib only): `Report` percentiles and per-worker breakdown
+  (done, v0.4.0) and the `Meter` streaming hook (done, v0.5.0).
+- **Separate modules** (own `go.mod`, opt-in) — *next*: concrete exporters
+  implementing `Meter` under `flow/x/…` (Prometheus, then OpenTelemetry), so
+  importing the core never pulls their dependencies.
 
 ## Limitations
 

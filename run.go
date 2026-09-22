@@ -11,6 +11,7 @@ type config struct {
 	ordered  bool
 	prefetch int
 	observe  *Report
+	meter    Meter
 }
 
 // Option configures a Run.
@@ -95,6 +96,12 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		start = time.Now()
 	}
 
+	var mi *meterInstruments
+	if cfg.meter != nil {
+		mi = newMeterInstruments(cfg.meter)
+	}
+	observing := cfg.observe != nil || cfg.meter != nil
+
 	var (
 		errOnce  sync.Once
 		firstErr error
@@ -131,6 +138,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 			case in <- seqItem[I]{seq: seq, val: v}:
 				pr.prodBlockedSince(t)
 				pr.incProduced()
+				mi.incProduced()
 				seq++
 				return nil
 			case <-ctx.Done():
@@ -157,7 +165,10 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 			}
 			wp.addIdle(t)
 
-			tb := wp.now()
+			var tb time.Time
+			if observing {
+				tb = time.Now()
+			}
 			var outs []O
 			err := proc.Process(ctx, it.val, func(o O) error {
 				outs = append(outs, o)
@@ -165,6 +176,9 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 			})
 			wp.addBusy(tb)
 			wp.addEmitted(len(outs))
+			if mi != nil {
+				mi.observeProcess(time.Since(tb), len(outs))
+			}
 			if err != nil {
 				if ctx.Err() == nil {
 					fail(err)
@@ -229,6 +243,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		err := c.Consume(ctx, o)
 		pr.consumeSince(t)
 		pr.incConsumed()
+		mi.incConsumed()
 		if err != nil {
 			fail(err)
 			stopped = true
