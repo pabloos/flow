@@ -23,6 +23,12 @@ jobs:
         run: go build ./...
       - name: Test (race + coverage)
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Test submodules
+        run: |
+          for mod in x/*/; do
+            echo "== $mod =="
+            ( cd "$mod" && go vet ./... && go test -race ./... )
+          done
 
   coverage-badge:
     # Only on pushes to main: PRs from forks can't write, and the badge tracks main.
