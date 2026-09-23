@@ -251,8 +251,29 @@ err := flow.Run(ctx, prod, proc, cons, flow.Workers(8), flow.WithMeter(m))
 ```
 
 `Meter` is deliberately tiny (instrument-based, à la OpenTelemetry) so the core
-stays zero-dependency; concrete exporters (Prometheus, OpenTelemetry) live in
-separate submodules under `flow/x/…`.
+stays zero-dependency; concrete exporters live in separate submodules under
+`flow/x/…`, so only code that needs one pulls in its dependencies.
+
+The Prometheus exporter is the first:
+
+```sh
+go get github.com/pabloos/flow/x/prometheus
+```
+
+```go
+import (
+    flowprom "github.com/pabloos/flow/x/prometheus"
+    "github.com/prometheus/client_golang/prometheus"
+)
+
+reg := prometheus.NewRegistry()
+err := flow.Run(ctx, prod, proc, cons,
+    flow.Workers(8),
+    flow.WithMeter(flowprom.NewMeter(reg)),
+)
+// reg now exposes flow_produced_total, flow_processed_total, flow_emitted_total,
+// flow_consumed_total and flow_process_latency_seconds
+```
 
 ## Prior art
 
