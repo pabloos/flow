@@ -256,6 +256,19 @@ err := flow.Run(ctx, prod, proc, cons, flow.Workers(8), flow.WithMeter(m))
 stays zero-dependency; concrete exporters live in separate submodules under
 `flow/x/…`, so only code that needs one pulls in its dependencies.
 
+Instruments are created with optional `Attr` key/value pairs. flow's attributes
+are static per instrument — a worker index, a stage name — never per
+measurement, so an exporter bakes them in once (Prometheus const labels, a
+precomputed OpenTelemetry attribute set) and `Add` / `Record` stay
+allocation-free. Attributes are part of an instrument's identity: same name,
+different attrs means a different series.
+
+**Implementing `Counter` and `Histogram` is enough, and will stay enough.** flow
+will not add a method to `Meter`, `Counter` or `Histogram`; new kinds of
+instrument arrive as separate optional interfaces that the engine discovers with
+a type assertion — the `http.Flusher` pattern — so a `Meter` written today keeps
+compiling and keeps working.
+
 The Prometheus exporter is the first:
 
 ```sh
