@@ -32,9 +32,13 @@ func Ordered() Option {
 	return func(c *config) { c.ordered = true }
 }
 
-// Prefetch sets how many items may be queued ahead of the workers (the
-// in-flight window), letting the producer run ahead instead of lock-stepping
-// with the pool. Default 0 (unbuffered: strict lock-step).
+// Prefetch sets how many items may be queued ahead of the workers, letting the
+// producer run ahead instead of lock-stepping with the pool. Default 0
+// (unbuffered: strict lock-step).
+//
+// Run queues them in one shared channel, so the in-flight window is n. In
+// RunPartitioned each worker owns its queue — that is what keeps one slow key
+// from stalling the others — so the window is n per worker, n*Workers in total.
 func Prefetch(n int) Option {
 	return func(c *config) {
 		if n > 0 {
@@ -52,6 +56,24 @@ func Prefetch(n int) Option {
 func Observe(dst *Report) Option {
 	return func(c *config) { c.observe = dst }
 }
+
+// StageError wraps the error that stopped a run, naming the end it came from.
+// Run returns one whenever a producer, processor or consumer fails, so callers
+// can tell whose fault it was without instrumenting their own ends:
+//
+//	var se *flow.StageError
+//	if errors.As(err, &se) && se.Stage == flow.StageConsumer { ... }
+//
+// The wrapped error stays reachable through errors.Is and errors.Unwrap. A run
+// stopped by its caller's context returns that context error unwrapped, since
+// no stage failed.
+type StageError struct {
+	Stage Stage
+	Err   error
+}
+
+func (e *StageError) Error() string { return e.Stage.String() + ": " + e.Err.Error() }
+func (e *StageError) Unwrap() error { return e.Err }
 
 type seqItem[T any] struct {
 	seq uint64
@@ -106,16 +128,24 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		errOnce  sync.Once
 		firstErr error
 	)
-	fail := func(err error) {
+	fail := func(stage Stage, err error) {
 		if err != nil {
 			errOnce.Do(func() {
-				firstErr = err
+				firstErr = &StageError{Stage: stage, Err: err}
 				cancel()
 			})
 		}
 	}
 
-	in := make(chan seqItem[I], cfg.prefetch)
+	// Intake. In the partitioned path every worker already owns a Prefetch-sized
+	// queue, so buffering the intake as well would apply Prefetch twice and hold
+	// Prefetch*(Workers+1) items; keep it unbuffered there and let the per-worker
+	// queues be the whole window.
+	intake := cfg.prefetch
+	if partition != nil {
+		intake = 0
+	}
+	in := make(chan seqItem[I], intake)
 	done := make(chan batch[O])
 
 	// Producer: assigns a contiguous sequence number to every value. emit
@@ -146,7 +176,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 			}
 		})
 		if ctx.Err() == nil {
-			fail(err)
+			fail(StageProducer, err)
 		}
 	}()
 
@@ -187,7 +217,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 			}
 			if err != nil {
 				if ctx.Err() == nil {
-					fail(err)
+					fail(StageProcessor, err)
 				}
 				return
 			}
@@ -257,7 +287,7 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		pr.incConsumed()
 		mi.incConsumed()
 		if err != nil {
-			fail(err)
+			fail(StageConsumer, err)
 			stopped = true
 		}
 	}

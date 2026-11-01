@@ -95,13 +95,13 @@ func (h fakeHistogram) Record(time.Duration) {
 	h.m.mu.Unlock()
 }
 
-func TestWithMeterRecords(t *testing.T) {
+func TestMetricsRecords(t *testing.T) {
 	m := newFakeMeter()
 	n := 100
 	err := flow.Run(context.Background(), flow.Slice(rangeN(n)...),
 		flow.FlatMap(func(x int) []int { return []int{x, x} }), // 1 -> 2
 		flow.Into(new([]int)),
-		flow.Workers(4), flow.WithMeter(m))
+		flow.Workers(4), flow.Metrics(m))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestEngineAsksForAggregateInstrumentsWithoutAttrs(t *testing.T) {
 	m := newFakeMeter()
 	err := flow.Run(context.Background(), flow.Slice(1, 2, 3),
 		flow.Map(func(n int) int { return n }), flow.Into(new([]int)),
-		flow.WithMeter(m))
+		flow.Metrics(m))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,13 +178,13 @@ func TestMeterAttrsAreInstrumentIdentity(t *testing.T) {
 }
 
 // A Meter and a Report can be collected in the same run.
-func TestWithMeterAndObserveCoexist(t *testing.T) {
+func TestMetricsAndObserveCoexist(t *testing.T) {
 	m := newFakeMeter()
 	var rep flow.Report
 	err := flow.Run(context.Background(), flow.Slice(rangeN(50)...),
 		flow.Map(func(x int) int { return x * 2 }),
 		flow.Into(new([]int)),
-		flow.Workers(4), flow.WithMeter(m), flow.Observe(&rep))
+		flow.Workers(4), flow.Metrics(m), flow.Observe(&rep))
 	if err != nil {
 		t.Fatal(err)
 	}

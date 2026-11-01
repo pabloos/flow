@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -245,4 +246,128 @@ func TestCancelledContextIsReported(t *testing.T) {
 			t.Fatalf("consumed %d values, want 3", len(out))
 		}
 	})
+}
+
+// Prefetch is the in-flight window, and it must mean the same thing in both
+// entry points: n for Run, which queues in one shared channel, and n per worker
+// for RunPartitioned, where each worker owns its queue. It used to be applied to
+// the shared intake *and* to every worker queue, holding n*(Workers+1) items.
+func TestPrefetchWindow(t *testing.T) {
+	const prefetch, workers = 10, 4
+
+	measure := func(partitioned bool) int64 {
+		var emitted atomic.Int64
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		prod := flow.ProducerFunc[int](func(ctx context.Context, emit func(int) error) error {
+			for i := 0; ; i++ {
+				if err := emit(i); err != nil {
+					return err
+				}
+				emitted.Add(1)
+			}
+		})
+		proc := flow.Map(func(n int) int { return n })
+		held := make(chan struct{})
+		cons := flow.ConsumerFunc[int](func(ctx context.Context, v int) error {
+			<-held // the sink never drains, so the pipeline fills and stops
+			return nil
+		})
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if partitioned {
+				_ = flow.RunPartitioned(ctx, prod, proc, cons,
+					func(n int) int { return n }, // spread over every worker
+					flow.Workers(workers), flow.Prefetch(prefetch))
+			} else {
+				_ = flow.Run(ctx, prod, proc, cons,
+					flow.Workers(workers), flow.Prefetch(prefetch))
+			}
+		}()
+
+		time.Sleep(300 * time.Millisecond) // let it saturate
+		n := emitted.Load()
+		cancel()
+		close(held)
+		<-done
+		return n
+	}
+
+	// Beyond the queues themselves, each worker can hold one item in Process and
+	// one waiting to deliver, plus one in the collector: a small, bounded slack.
+	slack := int64(2*workers + 2)
+
+	shared := measure(false)
+	if max := int64(prefetch) + slack; shared > max {
+		t.Errorf("Run in-flight = %d, want <= %d", shared, max)
+	}
+	perWorker := measure(true)
+	if max := int64(prefetch*workers) + slack; perWorker > max {
+		t.Errorf("RunPartitioned in-flight = %d, want <= %d", perWorker, max)
+	}
+	t.Logf("Prefetch(%d), Workers(%d): Run=%d  RunPartitioned=%d",
+		prefetch, workers, shared, perWorker)
+}
+
+// StageError names the end that failed and keeps the original error reachable.
+func TestStageErrorIdentifiesFailingEnd(t *testing.T) {
+	boom := errors.New("boom")
+	cases := []struct {
+		name string
+		want flow.Stage
+		run  func() error
+	}{
+		{"producer", flow.StageProducer, func() error {
+			return flow.Run(context.Background(),
+				flow.ProducerFunc[int](func(ctx context.Context, emit func(int) error) error {
+					return boom
+				}),
+				flow.Map(func(n int) int { return n }), flow.Into(new([]int)))
+		}},
+		{"processor", flow.StageProcessor, func() error {
+			return flow.Run(context.Background(), flow.Slice(1, 2, 3),
+				flow.TryMap(func(n int) (int, error) { return 0, boom }),
+				flow.Into(new([]int)))
+		}},
+		{"consumer", flow.StageConsumer, func() error {
+			return flow.Run(context.Background(), flow.Slice(1, 2, 3),
+				flow.Map(func(n int) int { return n }),
+				flow.Each(func(n int) error { return boom }))
+		}},
+	}
+
+	for _, tc := range cases {
+		err := tc.run()
+		var se *flow.StageError
+		if !errors.As(err, &se) {
+			t.Errorf("%s: err = %v, want a *flow.StageError", tc.name, err)
+			continue
+		}
+		if se.Stage != tc.want {
+			t.Errorf("%s: stage = %s, want %s", tc.name, se.Stage, tc.want)
+		}
+		if !errors.Is(err, boom) {
+			t.Errorf("%s: original error unreachable through %v", tc.name, err)
+		}
+	}
+}
+
+// A run stopped by its caller returns the context error unwrapped: no stage
+// failed, so there is nothing to name.
+func TestCallerCancellationIsNotAStageError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := flow.Run(ctx, flow.Slice(1, 2, 3),
+		flow.Map(func(n int) int { return n }), flow.Into(new([]int)))
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	var se *flow.StageError
+	if errors.As(err, &se) {
+		t.Errorf("err = %v, want it not wrapped as a StageError", err)
+	}
 }

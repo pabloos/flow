@@ -15,7 +15,7 @@ type Attr struct {
 
 // Meter is flow's streaming-metrics extension point. Implement it in a separate
 // module — so the core stays zero-dependency — to forward live measurements to a
-// backend such as Prometheus or OpenTelemetry, and enable it with WithMeter.
+// backend such as Prometheus or OpenTelemetry, and enable it with Metrics.
 //
 // The engine asks the Meter for its instruments once when a run starts, then
 // updates them on the hot path. Instrument methods are called from many worker
@@ -49,17 +49,17 @@ type Histogram interface {
 	Record(d time.Duration)
 }
 
-// WithMeter streams live measurements to m during the run: the counters
+// Metrics streams live measurements to m during the run: the counters
 // "produced", "processed", "emitted" and "consumed", and the histograms
 // "process_latency", "worker_idle" and "worker_blocked" — the same busy / idle
 // / blocked split that Observe uses to localize the bottleneck, but live and
 // per-interval. Opt-in; with no Meter the hot path pays nothing.
-func WithMeter(m Meter) Option {
+func Metrics(m Meter) Option {
 	return func(c *config) { c.meter = m }
 }
 
 // meterInstruments is the fixed set of instruments the engine records to. It is
-// nil unless WithMeter is set; every method is a no-op on a nil receiver.
+// nil unless Metrics is set; every method is a no-op on a nil receiver.
 type meterInstruments struct {
 	produced, processed, emitted, consumed Counter
 	procLatency                            Histogram

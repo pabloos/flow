@@ -163,6 +163,11 @@ err := flow.Run(ctx, producer, proc, consumer,
 )
 ```
 
+`Prefetch(n)` is `n` items queued ahead of the pool. `Run` queues them in one
+shared channel, so the window is `n`; `RunPartitioned` gives each worker its own
+queue — that is what stops one slow key from stalling the others — so the window
+is `n` per worker, `n × Workers` in total.
+
 `Ordered()` restores the original input order even though workers finish at
 different times (and it survives `FlatMap` sibling expansion). Without it,
 outputs are consumed as they arrive. The consumer is always called from a single
@@ -185,6 +190,17 @@ err := flow.RunPartitioned(ctx, producer, proc, consumer,
 Combine it with `Ordered()` to also restore the global input order at the
 consumer; on its own it only guarantees order within each key.
 
+Strings and the integer types are hashed directly and allocation-free. Return a
+`uint64` and it is taken as the hash itself, which is how you pick the
+distribution yourself:
+
+```go
+func(e Event) uint64 { return myHash(e.Tenant) }
+```
+
+Any other comparable key falls back to hashing its `%#v` form — correct, but
+slower; prefer a fast path on a hot pipeline.
+
 ## Batteries-included ends
 
 ```go
@@ -205,6 +221,20 @@ err := flow.Run(ctx, prod, flow.TryMap(risky), sink)
 if err != nil { /* the pipeline stopped at the first failure */ }
 ```
 
+The error is wrapped in a `*StageError` naming the end it came from, so you can
+tell whose fault it was without instrumenting your own ends. The original error
+stays reachable through `errors.Is` / `errors.Unwrap`:
+
+```go
+var se *flow.StageError
+if errors.As(err, &se) && se.Stage == flow.StageConsumer {
+    // the sink failed, not the work
+}
+```
+
+A run stopped by its caller's context returns that context error unwrapped —
+no stage failed, so there is nothing to name.
+
 Back-pressure is implicit: `emit` blocks while the pipeline is saturated, all the
 way back to the producer.
 
@@ -217,7 +247,7 @@ the bottleneck:
 ```go
 var rep flow.Report
 err := flow.Run(ctx, prod, proc, cons, flow.Workers(8), flow.Observe(&rep))
-fmt.Println(&rep)
+fmt.Println(rep)
 ```
 
 ```
@@ -242,14 +272,14 @@ flags uneven workers; the full data is in `rep.ProcessLatency` and
 ### Streaming metrics
 
 `Observe` is a one-shot snapshot; for live metrics during a run — and for
-long-lived pipelines that never "end" — implement `Meter` and pass `WithMeter`.
+long-lived pipelines that never "end" — implement `Meter` and pass `Metrics`.
 flow records the counters `produced` / `processed` / `emitted` / `consumed` and
 the histograms `process_latency`, `worker_idle` and `worker_blocked` to your
 instruments — the same busy / idle / blocked split `Observe` uses to localize
 the bottleneck, but live and per-interval:
 
 ```go
-err := flow.Run(ctx, prod, proc, cons, flow.Workers(8), flow.WithMeter(m))
+err := flow.Run(ctx, prod, proc, cons, flow.Workers(8), flow.Metrics(m))
 ```
 
 `Meter` is deliberately tiny (instrument-based, à la OpenTelemetry) so the core
@@ -284,7 +314,7 @@ import (
 reg := prometheus.NewRegistry()
 err := flow.Run(ctx, prod, proc, cons,
     flow.Workers(8),
-    flow.WithMeter(flowprom.NewMeter(reg)),
+    flow.Metrics(flowprom.NewMeter(reg)),
 )
 // reg now exposes flow_produced_total, flow_processed_total, flow_emitted_total,
 // flow_consumed_total and the flow_process_latency_seconds / flow_worker_idle_seconds
@@ -306,7 +336,7 @@ import (
 
 err := flow.Run(ctx, prod, proc, cons,
     flow.Workers(8),
-    flow.WithMeter(flowotel.NewMeter(otel.Meter("flow"))),
+    flow.Metrics(flowotel.NewMeter(otel.Meter("flow"))),
 )
 // records the counters flow.produced, flow.processed, flow.emitted,
 // flow.consumed and the flow.process_latency / flow.worker_idle /

@@ -70,7 +70,10 @@ type Report struct {
 }
 
 // Util is the fraction of available worker-time spent doing work (0..1).
-func (r *Report) Util() float64 {
+//
+// The receiver is a value, not a pointer, so that fmt.Println(rep) prints the
+// formatted report rather than the raw struct.
+func (r Report) Util() float64 {
 	total := time.Duration(r.Workers) * r.Wall
 	if total <= 0 {
 		return 0
@@ -78,7 +81,7 @@ func (r *Report) Util() float64 {
 	return float64(r.WorkerBusy) / float64(total)
 }
 
-func (r *Report) String() string {
+func (r Report) String() string {
 	ms := func(d time.Duration) time.Duration { return d.Round(time.Millisecond) }
 	us := func(d time.Duration) time.Duration { return d.Round(time.Microsecond) }
 	var b strings.Builder

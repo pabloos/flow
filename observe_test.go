@@ -2,6 +2,7 @@ package flow_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ func TestBottleneckConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rep.Bottleneck != flow.StageConsumer {
-		t.Fatalf("want consumer, got %s\n%s", rep.Bottleneck, &rep)
+		t.Fatalf("want consumer, got %s\n%s", rep.Bottleneck, rep)
 	}
 }
 
@@ -64,7 +65,7 @@ func TestBottleneckProcessor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rep.Bottleneck != flow.StageProcessor {
-		t.Fatalf("want processor, got %s\n%s", rep.Bottleneck, &rep)
+		t.Fatalf("want processor, got %s\n%s", rep.Bottleneck, rep)
 	}
 }
 
@@ -88,7 +89,7 @@ func TestBottleneckProducer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rep.Bottleneck != flow.StageProducer {
-		t.Fatalf("want producer, got %s\n%s", rep.Bottleneck, &rep)
+		t.Fatalf("want producer, got %s\n%s", rep.Bottleneck, rep)
 	}
 }
 
@@ -168,5 +169,24 @@ func TestObserveReportStringFull(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Fatalf("String() missing %q:\n%s", want, s)
 		}
+	}
+}
+
+// String has a value receiver, so printing a Report prints the report rather
+// than the raw struct — no & required at the call site.
+func TestReportPrintsFromValue(t *testing.T) {
+	var rep flow.Report
+	if err := flow.Run(context.Background(), flow.Slice(1, 2, 3),
+		flow.Map(func(n int) int { return n }), flow.Into(new([]int)),
+		flow.Observe(&rep)); err != nil {
+		t.Fatal(err)
+	}
+
+	value := fmt.Sprintf("%v", rep)
+	if !strings.HasPrefix(value, "flow report") {
+		t.Fatalf("printing a Report value gave %.40q, want the formatted report", value)
+	}
+	if value != fmt.Sprintf("%v", &rep) {
+		t.Error("value and pointer forms differ; both should print the report")
 	}
 }
