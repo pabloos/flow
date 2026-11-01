@@ -275,6 +275,27 @@ err := flow.Run(ctx, prod, proc, cons,
 // flow_consumed_total and flow_process_latency_seconds
 ```
 
+The OpenTelemetry exporter feeds the same measurements to any OTel pipeline
+(OTLP, the Prometheus bridge, stdout):
+
+```sh
+go get github.com/pabloos/flow/x/otel
+```
+
+```go
+import (
+    flowotel "github.com/pabloos/flow/x/otel"
+    "go.opentelemetry.io/otel"
+)
+
+err := flow.Run(ctx, prod, proc, cons,
+    flow.Workers(8),
+    flow.WithMeter(flowotel.NewMeter(otel.Meter("flow"))),
+)
+// records the counters flow.produced, flow.processed, flow.emitted,
+// flow.consumed and the flow.process_latency histogram (seconds)
+```
+
 ## Prior art
 
 - [destel/rill](https://github.com/destel/rill) — composable channel operators with ordered variants; a great fit if you like the operator-chaining style.
@@ -300,9 +321,9 @@ Observability grows without breaking the core's zero-dependency promise:
 
 - **In core** (stdlib only): `Report` percentiles and per-worker breakdown
   (done, v0.4.0) and the `Meter` streaming hook (done, v0.5.0).
-- **Separate modules** (own `go.mod`, opt-in) — *next*: concrete exporters
-  implementing `Meter` under `flow/x/…` (Prometheus, then OpenTelemetry), so
-  importing the core never pulls their dependencies.
+- **Separate modules** (own `go.mod`, opt-in): concrete exporters implementing
+  `Meter` under `flow/x/…` — Prometheus (`x/prometheus`) and OpenTelemetry
+  (`x/otel`), both done — so importing the core never pulls their dependencies.
 
 ## Limitations
 
