@@ -8,8 +8,8 @@ github.com/klauspost/compress v1.17.9 h1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2
 github.com/klauspost/compress v1.17.9/go.mod h1:Di0epgTjJY877eYKx5yC51cX2A2Vl2ibi7bDH9ttBbw=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/pabloos/flow v0.7.0 h1:VZ3ad5Whc9ptqqBVr4nmqZT3YsxeQ5JXmQ8I1LvCtLA=
-github.com/pabloos/flow v0.7.0/go.mod h1:8YM8kMhmio8UX5xgrejVExH8QXfQf0iIC6BVDL33IRc=
+github.com/pabloos/flow v0.8.0 h1:I+stnc77k1yFN8znyMYzgJWftks28CE8mrif15SQMUY=
+github.com/pabloos/flow v0.8.0/go.mod h1:8YM8kMhmio8UX5xgrejVExH8QXfQf0iIC6BVDL33IRc=
 github.com/prometheus/client_golang v1.20.5 h1:cxppBPuYhUnsO6yo/aoRol4L7q7UFfdm+bR9r+8l63Y=
 github.com/prometheus/client_golang v1.20.5/go.mod h1:PIEt8X02hGcP8JWbeHyeZ53Y/jReSnHgO035n//V5WE=
 github.com/prometheus/client_model v0.6.1 h1:ZKSh/rekM+n3CeS952MLRAdFwIKqeY8b62p8ais2e9E=

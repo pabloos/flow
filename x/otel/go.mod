@@ -3,7 +3,7 @@ module github.com/pabloos/flow/x/otel
 go 1.23
 
 require (
-	github.com/pabloos/flow v0.7.0
+	github.com/pabloos/flow v0.8.0
 	go.opentelemetry.io/otel v1.32.0
 	go.opentelemetry.io/otel/metric v1.32.0
 	go.opentelemetry.io/otel/sdk/metric v1.32.0
