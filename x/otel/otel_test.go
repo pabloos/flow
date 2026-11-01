@@ -40,6 +40,14 @@ func TestMeterRecordsToReader(t *testing.T) {
 	if got := histogramCount(t, rm, "flow.process_latency"); got != 5 {
 		t.Errorf("process_latency sample count = %d, want 5", got)
 	}
+	// Since flow v0.6.0 the Meter also streams the worker idle/blocked split:
+	// one sample per item received / delivered.
+	if got := histogramCount(t, rm, "flow.worker_idle"); got != 5 {
+		t.Errorf("worker_idle sample count = %d, want 5", got)
+	}
+	if got := histogramCount(t, rm, "flow.worker_blocked"); got != 5 {
+		t.Errorf("worker_blocked sample count = %d, want 5", got)
+	}
 }
 
 // Reusing a Meter across runs must not re-create instruments or lose counts.

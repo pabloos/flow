@@ -3,7 +3,7 @@ module github.com/pabloos/flow/x/prometheus
 go 1.23
 
 require (
-	github.com/pabloos/flow v0.5.0
+	github.com/pabloos/flow v0.6.0
 	github.com/prometheus/client_golang v1.20.5
 )
 
