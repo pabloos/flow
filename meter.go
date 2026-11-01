@@ -27,8 +27,10 @@ type Histogram interface {
 }
 
 // WithMeter streams live measurements to m during the run: the counters
-// "produced", "processed", "emitted" and "consumed", and the histogram
-// "process_latency". Opt-in; with no Meter the hot path pays nothing.
+// "produced", "processed", "emitted" and "consumed", and the histograms
+// "process_latency", "worker_idle" and "worker_blocked" — the same busy / idle
+// / blocked split that Observe uses to localize the bottleneck, but live and
+// per-interval. Opt-in; with no Meter the hot path pays nothing.
 func WithMeter(m Meter) Option {
 	return func(c *config) { c.meter = m }
 }
@@ -38,15 +40,18 @@ func WithMeter(m Meter) Option {
 type meterInstruments struct {
 	produced, processed, emitted, consumed Counter
 	procLatency                            Histogram
+	workerIdle, workerBlocked              Histogram
 }
 
 func newMeterInstruments(m Meter) *meterInstruments {
 	return &meterInstruments{
-		produced:    m.Counter("produced"),
-		processed:   m.Counter("processed"),
-		emitted:     m.Counter("emitted"),
-		consumed:    m.Counter("consumed"),
-		procLatency: m.Histogram("process_latency"),
+		produced:      m.Counter("produced"),
+		processed:     m.Counter("processed"),
+		emitted:       m.Counter("emitted"),
+		consumed:      m.Counter("consumed"),
+		procLatency:   m.Histogram("process_latency"),
+		workerIdle:    m.Histogram("worker_idle"),
+		workerBlocked: m.Histogram("worker_blocked"),
 	}
 }
 
@@ -73,4 +78,19 @@ func (m *meterInstruments) observeProcess(d time.Duration, emitted int) {
 		m.emitted.Add(int64(emitted))
 	}
 	m.procLatency.Record(d)
+}
+
+// observeIdle records one interval a worker spent waiting for input (producer
+// too slow). observeBlocked records one interval it spent waiting to deliver
+// downstream (consumer too slow).
+func (m *meterInstruments) observeIdle(d time.Duration) {
+	if m != nil {
+		m.workerIdle.Record(d)
+	}
+}
+
+func (m *meterInstruments) observeBlocked(d time.Duration) {
+	if m != nil {
+		m.workerBlocked.Record(d)
+	}
 }

@@ -244,7 +244,9 @@ flags uneven workers; the full data is in `rep.ProcessLatency` and
 `Observe` is a one-shot snapshot; for live metrics during a run — and for
 long-lived pipelines that never "end" — implement `Meter` and pass `WithMeter`.
 flow records the counters `produced` / `processed` / `emitted` / `consumed` and
-the `process_latency` histogram to your instruments:
+the histograms `process_latency`, `worker_idle` and `worker_blocked` to your
+instruments — the same busy / idle / blocked split `Observe` uses to localize
+the bottleneck, but live and per-interval:
 
 ```go
 err := flow.Run(ctx, prod, proc, cons, flow.Workers(8), flow.WithMeter(m))
@@ -272,7 +274,8 @@ err := flow.Run(ctx, prod, proc, cons,
     flow.WithMeter(flowprom.NewMeter(reg)),
 )
 // reg now exposes flow_produced_total, flow_processed_total, flow_emitted_total,
-// flow_consumed_total and flow_process_latency_seconds
+// flow_consumed_total and the flow_process_latency_seconds / flow_worker_idle_seconds
+// / flow_worker_blocked_seconds histograms
 ```
 
 The OpenTelemetry exporter feeds the same measurements to any OTel pipeline
@@ -293,7 +296,8 @@ err := flow.Run(ctx, prod, proc, cons,
     flow.WithMeter(flowotel.NewMeter(otel.Meter("flow"))),
 )
 // records the counters flow.produced, flow.processed, flow.emitted,
-// flow.consumed and the flow.process_latency histogram (seconds)
+// flow.consumed and the flow.process_latency / flow.worker_idle /
+// flow.worker_blocked histograms (seconds)
 ```
 
 ## Prior art
