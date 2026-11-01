@@ -64,6 +64,37 @@ func TestMeterReuseAcrossRuns(t *testing.T) {
 	}
 }
 
+// flow.Attr becomes a Prometheus const label, and attrs are part of an
+// instrument's identity: same name, different attrs means separate series.
+func TestAttrsBecomeConstLabels(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := flowprom.NewMeter(reg)
+
+	m.Counter("processed", flow.Attr{Key: "worker", Value: "0"}).Add(5)
+	m.Counter("processed", flow.Attr{Key: "worker", Value: "1"}).Add(7)
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, mf := range mfs {
+		if mf.GetName() != "flow_processed_total" {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			for _, l := range metric.GetLabel() {
+				if l.GetName() == "worker" {
+					got[l.GetValue()] = metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	if len(got) != 2 || got["0"] != 5 || got["1"] != 7 {
+		t.Fatalf("worker series = %v, want {0:5, 1:7}", got)
+	}
+}
+
 func counterValue(t *testing.T, reg *prometheus.Registry, name string) float64 {
 	t.Helper()
 	mfs, err := reg.Gather()

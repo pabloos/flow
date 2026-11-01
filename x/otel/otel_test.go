@@ -68,6 +68,32 @@ func TestMeterReuseAcrossRuns(t *testing.T) {
 	}
 }
 
+// flow.Attr becomes an OpenTelemetry attribute on every measurement, and attrs
+// are part of an instrument's identity: same name, different attrs means
+// separate data points.
+func TestAttrsBecomeOtelAttributes(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	m := flowotel.NewMeter(provider.Meter("flow-test"))
+
+	m.Counter("processed", flow.Attr{Key: "worker", Value: "0"}).Add(5)
+	m.Counter("processed", flow.Attr{Key: "worker", Value: "1"}).Add(7)
+
+	sum, ok := findMetric(t, collect(t, reader), "flow.processed").Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatal("flow.processed is not an Int64 Sum")
+	}
+	got := map[string]int64{}
+	for _, dp := range sum.DataPoints {
+		if v, found := dp.Attributes.Value("worker"); found {
+			got[v.AsString()] = dp.Value
+		}
+	}
+	if len(got) != 2 || got["0"] != 5 || got["1"] != 7 {
+		t.Fatalf("worker data points = %v, want {0:5, 1:7}", got)
+	}
+}
+
 func collect(t *testing.T, r sdkmetric.Reader) *metricdata.ResourceMetrics {
 	t.Helper()
 	rm := new(metricdata.ResourceMetrics)
