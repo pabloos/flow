@@ -158,12 +158,18 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 		defer workWG.Done()
 		wp := pr.wp(idx)
 		for {
-			t := wp.now()
+			var ti time.Time
+			if observing {
+				ti = time.Now()
+			}
 			it, ok := <-input
 			if !ok {
 				return
 			}
-			wp.addIdle(t)
+			wp.addIdle(ti)
+			if mi != nil {
+				mi.observeIdle(time.Since(ti))
+			}
 
 			var tb time.Time
 			if observing {
@@ -186,10 +192,16 @@ func run[I, O any](ctx context.Context, p Producer[I], proc Processor[I, O], c C
 				return
 			}
 
-			tw := wp.now()
+			var tw time.Time
+			if observing {
+				tw = time.Now()
+			}
 			select {
 			case done <- batch[O]{seq: it.seq, outs: outs}:
 				wp.addBlocked(tw)
+				if mi != nil {
+					mi.observeBlocked(time.Since(tw))
+				}
 			case <-ctx.Done():
 				return
 			}

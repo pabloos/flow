@@ -83,6 +83,15 @@ func TestWithMeterRecords(t *testing.T) {
 	if got := m.records("process_latency"); got != n {
 		t.Fatalf("process_latency records = %d, want %d", got, n)
 	}
+	// worker_idle is recorded once per item received, worker_blocked once per
+	// batch delivered downstream — so both see exactly n intervals. These are
+	// recorded with no Observe set, proving the Meter times them on its own.
+	if got := m.records("worker_idle"); got != n {
+		t.Fatalf("worker_idle records = %d, want %d", got, n)
+	}
+	if got := m.records("worker_blocked"); got != n {
+		t.Fatalf("worker_blocked records = %d, want %d", got, n)
+	}
 }
 
 // A Meter and a Report can be collected in the same run.

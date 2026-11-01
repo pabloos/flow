@@ -120,12 +120,6 @@ type workerProbe struct {
 	rng                 uint64
 }
 
-func (w *workerProbe) now() time.Time {
-	if w == nil {
-		return time.Time{}
-	}
-	return time.Now()
-}
 func (w *workerProbe) addIdle(t time.Time) {
 	if w != nil {
 		w.idle += int64(time.Since(t))
