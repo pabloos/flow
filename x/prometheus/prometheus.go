@@ -32,34 +32,61 @@ type meter struct {
 	histograms map[string]flow.Histogram
 }
 
-func (m *meter) Counter(name string) flow.Counter {
+// key folds name and attrs into one instrument identity: attributed and
+// unattributed instruments of the same name are distinct series.
+func key(name string, attrs []flow.Attr) string {
+	k := name
+	for _, a := range attrs {
+		k += "|" + a.Key + "=" + a.Value
+	}
+	return k
+}
+
+// labels turns flow attrs into Prometheus const labels, baked into the
+// instrument at creation so recording stays allocation-free.
+func labels(attrs []flow.Attr) prometheus.Labels {
+	if len(attrs) == 0 {
+		return nil
+	}
+	l := make(prometheus.Labels, len(attrs))
+	for _, a := range attrs {
+		l[a.Key] = a.Value
+	}
+	return l
+}
+
+func (m *meter) Counter(name string, attrs ...flow.Attr) flow.Counter {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if c, ok := m.counters[name]; ok {
+	k := key(name, attrs)
+	if c, ok := m.counters[k]; ok {
 		return c
 	}
 	c := counter{m.factory.NewCounter(prometheus.CounterOpts{
-		Namespace: "flow",
-		Name:      name + "_total",
-		Help:      "flow pipeline " + name + " count",
+		Namespace:   "flow",
+		Name:        name + "_total",
+		Help:        "flow pipeline " + name + " count",
+		ConstLabels: labels(attrs),
 	})}
-	m.counters[name] = c
+	m.counters[k] = c
 	return c
 }
 
-func (m *meter) Histogram(name string) flow.Histogram {
+func (m *meter) Histogram(name string, attrs ...flow.Attr) flow.Histogram {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if h, ok := m.histograms[name]; ok {
+	k := key(name, attrs)
+	if h, ok := m.histograms[k]; ok {
 		return h
 	}
 	h := histogram{m.factory.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "flow",
-		Name:      name + "_seconds",
-		Help:      "flow pipeline " + name + " in seconds",
-		Buckets:   prometheus.DefBuckets,
+		Namespace:   "flow",
+		Name:        name + "_seconds",
+		Help:        "flow pipeline " + name + " in seconds",
+		Buckets:     prometheus.DefBuckets,
+		ConstLabels: labels(attrs),
 	})}
-	m.histograms[name] = h
+	m.histograms[k] = h
 	return h
 }
 

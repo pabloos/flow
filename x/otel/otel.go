@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pabloos/flow"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -39,10 +40,35 @@ type meter struct {
 	histograms map[string]flow.Histogram
 }
 
-func (m *meter) Counter(name string) flow.Counter {
+// key folds name and attrs into one instrument identity: attributed and
+// unattributed instruments of the same name are distinct series.
+func key(name string, attrs []flow.Attr) string {
+	k := name
+	for _, a := range attrs {
+		k += "|" + a.Key + "=" + a.Value
+	}
+	return k
+}
+
+// kvs converts flow attrs to OpenTelemetry attributes. OTel attaches them per
+// measurement, so the option is precomputed once here and reused on every
+// Add/Record, keeping the recording path allocation-free.
+func kvs(attrs []flow.Attr) []attribute.KeyValue {
+	if len(attrs) == 0 {
+		return nil
+	}
+	out := make([]attribute.KeyValue, len(attrs))
+	for i, a := range attrs {
+		out[i] = attribute.String(a.Key, a.Value)
+	}
+	return out
+}
+
+func (m *meter) Counter(name string, attrs ...flow.Attr) flow.Counter {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if c, ok := m.counters[name]; ok {
+	k := key(name, attrs)
+	if c, ok := m.counters[k]; ok {
 		return c
 	}
 	inst, err := m.m.Int64Counter("flow."+name,
@@ -52,15 +78,19 @@ func (m *meter) Counter(name string) flow.Counter {
 		// condition: surface it at setup rather than silently dropping metrics.
 		panic("flow/x/otel: " + err.Error())
 	}
-	c := counter{inst}
-	m.counters[name] = c
+	c := counter{c: inst}
+	if set := kvs(attrs); len(set) > 0 {
+		c.opts = []metric.AddOption{metric.WithAttributes(set...)}
+	}
+	m.counters[k] = c
 	return c
 }
 
-func (m *meter) Histogram(name string) flow.Histogram {
+func (m *meter) Histogram(name string, attrs ...flow.Attr) flow.Histogram {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if h, ok := m.histograms[name]; ok {
+	k := key(name, attrs)
+	if h, ok := m.histograms[k]; ok {
 		return h
 	}
 	inst, err := m.m.Float64Histogram("flow."+name,
@@ -70,15 +100,26 @@ func (m *meter) Histogram(name string) flow.Histogram {
 	if err != nil {
 		panic("flow/x/otel: " + err.Error())
 	}
-	h := histogram{inst}
-	m.histograms[name] = h
+	h := histogram{h: inst}
+	if set := kvs(attrs); len(set) > 0 {
+		h.opts = []metric.RecordOption{metric.WithAttributes(set...)}
+	}
+	m.histograms[k] = h
 	return h
 }
 
-type counter struct{ c metric.Int64Counter }
+type counter struct {
+	c    metric.Int64Counter
+	opts []metric.AddOption
+}
 
-func (c counter) Add(n int64) { c.c.Add(context.Background(), n) }
+func (c counter) Add(n int64) { c.c.Add(context.Background(), n, c.opts...) }
 
-type histogram struct{ h metric.Float64Histogram }
+type histogram struct {
+	h    metric.Float64Histogram
+	opts []metric.RecordOption
+}
 
-func (h histogram) Record(d time.Duration) { h.h.Record(context.Background(), d.Seconds()) }
+func (h histogram) Record(d time.Duration) {
+	h.h.Record(context.Background(), d.Seconds(), h.opts...)
+}
