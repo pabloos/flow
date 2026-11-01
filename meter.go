@@ -2,6 +2,17 @@ package flow
 
 import "time"
 
+// Attr is a key/value pair attached to an instrument when it is created.
+//
+// flow's attributes are static per instrument — a worker index or a stage name,
+// fixed for the life of the instrument — never per measurement. That is why
+// they are passed at creation and not to Add or Record: an exporter can bake
+// them in once (Prometheus const labels, a precomputed OpenTelemetry attribute
+// set) and keep the recording path allocation-free.
+type Attr struct {
+	Key, Value string
+}
+
 // Meter is flow's streaming-metrics extension point. Implement it in a separate
 // module — so the core stays zero-dependency — to forward live measurements to a
 // backend such as Prometheus or OpenTelemetry, and enable it with WithMeter.
@@ -10,10 +21,22 @@ import "time"
 // updates them on the hot path. Instrument methods are called from many worker
 // goroutines at once, so implementations must be safe for concurrent use.
 //
+// # Stability
+//
+// Implementing Counter and Histogram is enough, and will stay enough: flow will
+// not add a method to this interface, nor to Counter or Histogram. New kinds of
+// instrument arrive instead as separate optional interfaces that the engine
+// discovers with a type assertion — the http.Flusher pattern — so a Meter
+// written today keeps compiling and keeps working.
+//
+// Two instruments that share a name must be asked for with the same set of
+// attribute keys, so backends that require stable label dimensions (Prometheus)
+// stay valid.
+//
 // Experimental: the observability API may change in a future v0.x release.
 type Meter interface {
-	Counter(name string) Counter
-	Histogram(name string) Histogram
+	Counter(name string, attrs ...Attr) Counter
+	Histogram(name string, attrs ...Attr) Histogram
 }
 
 // Counter is a monotonically increasing count.

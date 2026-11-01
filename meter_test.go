@@ -11,18 +11,51 @@ import (
 
 // fakeMeter is an in-memory Meter: it proves the contract is implementable and
 // lets us assert what the engine records — no external dependency needed.
+// Instruments are keyed by name *and* attributes, the way a real exporter must
+// key them, so attrs are part of an instrument's identity.
 type fakeMeter struct {
 	mu       sync.Mutex
 	counters map[string]int64
 	samples  map[string]int
+	asked    map[string][]flow.Attr // instrument name -> attrs it was created with
 }
 
 func newFakeMeter() *fakeMeter {
-	return &fakeMeter{counters: map[string]int64{}, samples: map[string]int{}}
+	return &fakeMeter{
+		counters: map[string]int64{},
+		samples:  map[string]int{},
+		asked:    map[string][]flow.Attr{},
+	}
 }
 
-func (m *fakeMeter) Counter(name string) flow.Counter     { return fakeCounter{m, name} }
-func (m *fakeMeter) Histogram(name string) flow.Histogram { return fakeHistogram{m, name} }
+// A Meter that implements nothing but Counter and Histogram must satisfy the
+// interface — the stability promise in meter.go, enforced at compile time.
+var _ flow.Meter = (*fakeMeter)(nil)
+
+// key folds name and attrs into one instrument identity.
+func key(name string, attrs []flow.Attr) string {
+	k := name
+	for _, a := range attrs {
+		k += "|" + a.Key + "=" + a.Value
+	}
+	return k
+}
+
+func (m *fakeMeter) Counter(name string, attrs ...flow.Attr) flow.Counter {
+	m.note(name, attrs)
+	return fakeCounter{m, key(name, attrs)}
+}
+
+func (m *fakeMeter) Histogram(name string, attrs ...flow.Attr) flow.Histogram {
+	m.note(name, attrs)
+	return fakeHistogram{m, key(name, attrs)}
+}
+
+func (m *fakeMeter) note(name string, attrs []flow.Attr) {
+	m.mu.Lock()
+	m.asked[name] = attrs
+	m.mu.Unlock()
+}
 
 func (m *fakeMeter) count(name string) int64 {
 	m.mu.Lock()
@@ -33,6 +66,11 @@ func (m *fakeMeter) records(name string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.samples[name]
+}
+func (m *fakeMeter) attrsFor(name string) []flow.Attr {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.asked[name]
 }
 
 type fakeCounter struct {
@@ -91,6 +129,51 @@ func TestWithMeterRecords(t *testing.T) {
 	}
 	if got := m.records("worker_blocked"); got != n {
 		t.Fatalf("worker_blocked records = %d, want %d", got, n)
+	}
+}
+
+// The engine's own instruments are pipeline-wide aggregates, so it asks for
+// them with no attributes. Pinned here so a stray attr — which would split a
+// series and break Prometheus' stable-label-dimension rule — fails loudly.
+func TestEngineAsksForAggregateInstrumentsWithoutAttrs(t *testing.T) {
+	m := newFakeMeter()
+	err := flow.Run(context.Background(), flow.Slice(1, 2, 3),
+		flow.Map(func(n int) int { return n }), flow.Into(new([]int)),
+		flow.WithMeter(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"produced", "processed", "emitted", "consumed",
+		"process_latency", "worker_idle", "worker_blocked",
+	} {
+		if got := m.attrsFor(name); len(got) != 0 {
+			t.Errorf("%s created with attrs %v, want none", name, got)
+		}
+	}
+}
+
+// Attributes are part of an instrument's identity: same name, different attrs
+// means different instruments. This is the contract exporters must honour when
+// flow starts labelling (e.g. per-worker breakdowns).
+func TestMeterAttrsAreInstrumentIdentity(t *testing.T) {
+	m := newFakeMeter()
+	w0 := m.Counter("processed", flow.Attr{Key: "worker", Value: "0"})
+	w1 := m.Counter("processed", flow.Attr{Key: "worker", Value: "1"})
+	plain := m.Counter("processed")
+
+	w0.Add(5)
+	w1.Add(7)
+	plain.Add(1)
+
+	if got := m.count("processed|worker=0"); got != 5 {
+		t.Errorf("worker=0 count = %d, want 5", got)
+	}
+	if got := m.count("processed|worker=1"); got != 7 {
+		t.Errorf("worker=1 count = %d, want 7", got)
+	}
+	if got := m.count("processed"); got != 1 {
+		t.Errorf("unattributed count = %d, want 1", got)
 	}
 }
 
