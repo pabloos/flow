@@ -17,7 +17,7 @@ func TestMeterRecordsToRegistry(t *testing.T) {
 		flow.Slice(1, 2, 3, 4, 5),
 		flow.FlatMap(func(n int) []int { return []int{n, -n} }), // 1 -> 2
 		flow.Into(new([]int)),
-		flow.Workers(2), flow.WithMeter(m))
+		flow.Workers(2), flow.Metrics(m))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestMeterReuseAcrossRuns(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		if err := flow.Run(context.Background(), flow.Slice(1, 2), double,
-			flow.Into(new([]int)), flow.WithMeter(m)); err != nil {
+			flow.Into(new([]int)), flow.Metrics(m)); err != nil {
 			t.Fatal(err)
 		}
 	}
